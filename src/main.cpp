@@ -1,46 +1,41 @@
 #include <Arduino.h>
-#include "driver/twai.h"
 #include <Adafruit_NeoPixel.h>
 
 // --- PIN CONFIGURATION ---
 #define LED_PIN       4
 #define NUM_LEDS      9
-#define CAN_TX_PIN    39
-#define CAN_RX_PIN    38
 
 // --- BUTTON PINS ---
-#define BTN_DOWN_PIN  6
-#define BTN_UP_PIN    41
+#define BTN_COLOR_PIN 6  // NC Button to cycle colors
+
+// --- ROTARY DIP SWITCH PINS ---
+// Assumes Common (C) is connected to Ground
+#define DIP_PIN_1     16 // Binary weight: 1
+#define DIP_PIN_2     17 // Binary weight: 2
+#define DIP_PIN_4     18 // Binary weight: 4
+#define DIP_PIN_8     8  // Binary weight: 8
 
 // --- STATE VARIABLES ---
-int currentRpm = 0;
-const int rpmStart = 3000;
-const int rpmMax = 9500;
+int currentColorIndex = 0;
+int lastNumLedsToLight = -1; 
+int lastColorIndex = -1;     
 
-int activeScreen = 1; 
-unsigned long lastButtonPress = 0; 
-const unsigned long debounceDelay = 100;
+// Button Debounce Variables
+unsigned long lastColorBtnPress = 0;
+const unsigned long debounceDelay = 300; // 300 milliseconds debounce delay
 
 // --- HARDWARE INITIALIZATION ---
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-// --- FUNCTION DECLARATIONS ---
-void setupCAN();
-void checkCANMessages();
-void checkButtons();
-void sendButtonCANMessage(uint32_t messageId, uint8_t buttonData);
-void sendActiveScreenCANMessage(uint8_t screenNum);
-void updateLEDs(int rpm);
-void playBootLedAnimation();
+const char* colorNames[] = {"Red", "Green", "Blue", "Cyan", "Magenta", "Yellow"};
 
-// --- HELPERS ---
-inline int16_t parseLE(const uint8_t* data, int offset) { 
-  uint16_t raw_val = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
-  return raw_val;
-}
+void checkButtons();
+void updateLEDs();
+void playBootLedAnimation();
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("Starting LED Steering Wheel Controller...");
   
   strip.begin();
   strip.setBrightness(50);
@@ -49,64 +44,21 @@ void setup() {
 
   playBootLedAnimation();
 
-  pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
-  pinMode(BTN_UP_PIN, INPUT_PULLUP);
+  // Initialize Buttons & DIP Switch
+  pinMode(BTN_COLOR_PIN, INPUT_PULLUP);
 
-  // Force the RX pin HIGH so the ESP32 thinks the CAN bus is quiet
-  pinMode(CAN_RX_PIN, INPUT_PULLUP);
+  pinMode(DIP_PIN_1, INPUT_PULLUP);
+  pinMode(DIP_PIN_2, INPUT_PULLUP);
+  pinMode(DIP_PIN_4, INPUT_PULLUP);
+  pinMode(DIP_PIN_8, INPUT_PULLUP);
 
-  setupCAN();
+  Serial.println("Hardware initialized. Ready for input.");
 }
 
 void loop() {
-  checkCANMessages();
   checkButtons();
-  updateLEDs(currentRpm);
+  updateLEDs();
   delay(10);
-}
-
-// ==========================================
-// CAN BUS IMPLEMENTATION
-// ==========================================
-
-void setupCAN() {
-  // CHANGED: Using TWAI_MODE_NO_ACK for desk testing without a network.
-  // Change back to TWAI_MODE_NORMAL when plugging into the actual car/dashboard!
-  twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN, TWAI_MODE_NO_ACK);
-  twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS(); 
-  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
-  
-  if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
-    if (twai_start() == ESP_OK) {
-      Serial.println("CAN Bus initialized successfully (NO ACK MODE).");
-    }
-  } else {
-    Serial.println("Failed to initialize CAN Bus.");
-  }
-}
-
-void checkCANMessages() {
-  twai_message_t rx_msg;
-  if (twai_receive(&rx_msg, pdMS_TO_TICKS(1)) == ESP_OK) {
-     if (rx_msg.identifier == 0x520) {
-       currentRpm = parseLE(rx_msg.data, 0);
-     }
-  }
-}
-
-void sendActiveScreenCANMessage(uint8_t screenNum) {
-  twai_message_t tx_msg;
-  tx_msg.identifier = 0x524;   
-  tx_msg.extd = 0;             
-  tx_msg.data_length_code = 1; 
-  tx_msg.data[0] = screenNum;  
-  
-  if (twai_transmit(&tx_msg, pdMS_TO_TICKS(10)) == ESP_OK) {
-    Serial.print("Screen change sent via CAN! Active Screen: ");
-    Serial.println(screenNum);
-  } else {
-    Serial.println("Warning: Failed to send screen change on CAN bus.");
-  }
 }
 
 // ==========================================
@@ -114,33 +66,67 @@ void sendActiveScreenCANMessage(uint8_t screenNum) {
 // ==========================================
 
 void checkButtons() {
-  bool btnDownPressed = (digitalRead(BTN_DOWN_PIN) == LOW);
-  bool btnUpPressed = (digitalRead(BTN_UP_PIN) == LOW);
+  unsigned long currentMillis = millis();
 
-  // CHANGED: Debounce is back to protect against noise and hyper-fast loops
-  if ((btnDownPressed || btnUpPressed) && (millis() - lastButtonPress > debounceDelay)) {
-    
-    if (btnUpPressed) {
-      activeScreen++;
-      if (activeScreen > 4) activeScreen = 4;
-      sendActiveScreenCANMessage(activeScreen);
-    } 
-    else if (btnDownPressed) {
-      activeScreen--;
-      if (activeScreen < 1) activeScreen = 1;
-      sendActiveScreenCANMessage(activeScreen);
+  // CHANGED: Reading HIGH because the button is Normally Closed (NC)
+  if (digitalRead(BTN_COLOR_PIN) == HIGH) {
+    if (currentMillis - lastColorBtnPress > debounceDelay) {
+      
+      currentColorIndex++;
+      if (currentColorIndex > 5) {
+        currentColorIndex = 0; 
+      }
+      
+      Serial.print("Button Pressed! Color changed to: ");
+      Serial.println(colorNames[currentColorIndex]);
+      
+      lastColorBtnPress = currentMillis;
     }
-    
-    lastButtonPress = millis();
   }
 }
 
 // ==========================================
-// LED DISPLAY & ANIMATIONS
+// LED DISPLAY
 // ==========================================
 
-void updateLEDs(int rpm) {
+void updateLEDs() {
+  // Read the BCD value. Switch pulls LOW when dot is present in the table.
+  uint8_t val1 = (digitalRead(DIP_PIN_1) == LOW) ? 1 : 0;
+  uint8_t val2 = (digitalRead(DIP_PIN_2) == LOW) ? 2 : 0;
+  uint8_t val4 = (digitalRead(DIP_PIN_4) == LOW) ? 4 : 0;
+  uint8_t val8 = (digitalRead(DIP_PIN_8) == LOW) ? 8 : 0;
+
+  // Sum the active weights
+  int numLedsToLight = val1 + val2 + val4 + val8;
+
+  if (numLedsToLight > NUM_LEDS) numLedsToLight = NUM_LEDS;
+
+  // Exit early if nothing changed
+  if (numLedsToLight == lastNumLedsToLight && currentColorIndex == lastColorIndex) {
+    return; 
+  }
+
+  if (numLedsToLight != lastNumLedsToLight) {
+    Serial.print("Dial Turned! LEDs active: ");
+    Serial.println(numLedsToLight);
+  }
+  
+  lastNumLedsToLight = numLedsToLight;
+  lastColorIndex = currentColorIndex;
+
+  uint32_t colors[] = {
+    strip.Color(255, 0, 0),     // 0: Red
+    strip.Color(0, 255, 0),     // 1: Green
+    strip.Color(0, 0, 255),     // 2: Blue
+    strip.Color(0, 255, 255),   // 3: Cyan
+    strip.Color(255, 0, 255),   // 4: Magenta
+    strip.Color(255, 255, 0)    // 5: Yellow
+  };
+
   strip.clear();
+  for (int i = 0; i < numLedsToLight; i++) {
+    strip.setPixelColor(i, colors[currentColorIndex]);
+  }
   strip.show();
 }
 
