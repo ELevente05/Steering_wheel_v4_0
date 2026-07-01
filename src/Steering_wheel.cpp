@@ -9,9 +9,21 @@
 #define CAN_RX_PIN    2
 
 // --- BUTTON PINS ---
-#define BTN_DOWN_PIN  5 
+#define BTN_DOWN_PIN  5
+#define BTN_2_PIN     6
+#define BTN_3_PIN     7
+#define BTN_BCK_1_PIN 39
+#define BTN_BCK_2_PIN 15
+#define BTN_4_PIN     40
+#define BTN_5_PIN     41
 #define BTN_UP_PIN    42
-#define BTN_TEST_PIN  7 // PDU Error Test Button
+
+// --- ROTARY DIP SWITCH PINS ---
+// Assumes Common (C) is connected to Ground (Active LOW)
+#define DIP_PIN_1     16 // Binary weight: 1
+#define DIP_PIN_2     17 // Binary weight: 2
+#define DIP_PIN_4     18 // Binary weight: 4
+#define DIP_PIN_8     8  // Binary weight: 8
 
 // --- STATE VARIABLES ---
 int currentRpm = 0;
@@ -20,12 +32,11 @@ const int rpmMax = 9500;
 
 int activeScreen = 1; 
 
-// Toggle state for our simulated PDU error
-bool testErrorActive = false; 
-
-// Button Debounce Variables
+// Button & Switch Timers
 unsigned long lastBtnPress = 0;
 const unsigned long debounceDelay = 250; 
+unsigned long lastErrorBroadcast = 0;
+int lastDIPValue = -1;
 
 // --- HARDWARE INITIALIZATION ---
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -34,8 +45,9 @@ Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 void setupCAN();
 void checkCANMessages();
 void checkButtons();
+int readRotaryDIP();
+void broadcastMockErrors(int mode);
 void sendActiveScreenCANMessage(uint8_t screenNum);
-void sendPDUErrorTestCANMessage(bool hasError);
 void updateLEDs(int rpm);
 void playBootLedAnimation();
 
@@ -46,13 +58,12 @@ inline int16_t parseLE(const uint8_t* data, int offset) {
 }
 
 void setup() {
-  // FIX: Increased from 500 to 800 to give the Dashboard time to draw its boot logos!
-  // Tweak this number up or down by 50ms to get the LED timing synced perfectly.
   delay(800); 
 
   Serial.begin(115200);
   Serial.println("Starting Steering Wheel CAN Controller...");
   
+  // 1. Initialize LEDs
   strip.begin();
   strip.setBrightness(50);
   strip.clear();
@@ -60,19 +71,60 @@ void setup() {
 
   playBootLedAnimation();
 
+  // 2. Initialize Buttons
   pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
   pinMode(BTN_UP_PIN, INPUT_PULLUP);
-  pinMode(BTN_TEST_PIN, INPUT_PULLUP);
 
+  // 3. Initialize Rotary DIP Switch
+  pinMode(DIP_PIN_1, INPUT_PULLUP);
+  pinMode(DIP_PIN_2, INPUT_PULLUP);
+  pinMode(DIP_PIN_4, INPUT_PULLUP);
+  pinMode(DIP_PIN_8, INPUT_PULLUP);
+
+  // 4. Initialize CAN Bus
   setupCAN();
 }
 
 void loop() {
+  // 1. Listen for incoming RPM data
   checkCANMessages();
+
+  // 2. Scan screen change buttons
   checkButtons();
+
+  // 3. Check Rotary Switch and Broadcast Errors (every 100ms to compete with real PDU if connected)
+  int currentDIP = readRotaryDIP();
+  if (currentDIP != lastDIPValue || millis() - lastErrorBroadcast > 100) {
+    if (currentDIP != lastDIPValue) {
+      Serial.print("Rotary Switch Changed! New Mode: ");
+      Serial.println(currentDIP);
+      lastDIPValue = currentDIP;
+    }
+    
+    broadcastMockErrors(currentDIP);
+    lastErrorBroadcast = millis();
+  }
+
+  // 4. Update the LEDs
   updateLEDs(currentRpm);
   
   delay(10);
+}
+
+// ==========================================
+// ROTARY DIP SWITCH LOGIC
+// ==========================================
+
+int readRotaryDIP() {
+  int val = 0;
+  // Because Common is Ground, a closed switch pulls the pin LOW. 
+  // We invert the reading (LOW = true) to calculate the binary value.
+  if (digitalRead(DIP_PIN_1) == LOW) val |= 1;
+  if (digitalRead(DIP_PIN_2) == LOW) val |= 2;
+  if (digitalRead(DIP_PIN_4) == LOW) val |= 4;
+  if (digitalRead(DIP_PIN_8) == LOW) val |= 8;
+  
+  return val;
 }
 
 // ==========================================
@@ -103,34 +155,49 @@ void checkCANMessages() {
 }
 
 void sendActiveScreenCANMessage(uint8_t screenNum) {
-  // FIX: Added {} to zero-initialize the struct and prevent garbage memory from breaking the flags
   twai_message_t tx_msg = {}; 
   tx_msg.identifier = 0x524;   
   tx_msg.extd = 0;             
   tx_msg.data_length_code = 1; 
   tx_msg.data[0] = screenNum;  
   
-  if (twai_transmit(&tx_msg, pdMS_TO_TICKS(10)) == ESP_OK) {
-    Serial.print("Screen change sent via CAN! Active Screen: ");
-    Serial.println(screenNum);
-  } else {
-    Serial.println("Warning: Failed to send screen change on CAN bus.");
-  }
+  twai_transmit(&tx_msg, pdMS_TO_TICKS(10));
 }
 
-void sendPDUErrorTestCANMessage(bool hasError) {
-  // FIX: Added {} to zero-initialize the struct
-  twai_message_t tx_msg = {}; 
-  tx_msg.identifier = 0x620;   
-  tx_msg.extd = 0;             
-  tx_msg.data_length_code = 1; 
-  tx_msg.data[0] = hasError ? 0x07 : 0x00;  
+// Simulate the complex telemetry of the PDU based on the rotary dial position
+void broadcastMockErrors(int mode) {
+  // 1. Handle Global PDU Faults (ID 0x620)
+  twai_message_t pdu_msg = {}; 
+  pdu_msg.identifier = 0x620;   
+  pdu_msg.extd = 0;             
+  pdu_msg.data_length_code = 1; 
   
-  if (twai_transmit(&tx_msg, pdMS_TO_TICKS(10)) == ESP_OK) {
-    Serial.print("PDU Test Error sent! State: ");
-    Serial.println(hasError ? "ACTIVE" : "CLEARED");
-  } else {
-    Serial.println("Warning: Failed to send PDU test message on CAN bus.");
+  if (mode == 9)       pdu_msg.data[0] = 0x01; // Low Volt Fault
+  else if (mode == 10) pdu_msg.data[0] = 0x02; // Power Calc Fault
+  else if (mode == 11) pdu_msg.data[0] = 0x04; // FET Fault
+  else                 pdu_msg.data[0] = 0x00; // All Clear
+  
+  twai_transmit(&pdu_msg, pdMS_TO_TICKS(1));
+
+  // 2. Handle Individual eFuse Faults (IDs 0x710 - 0x717)
+  for (int i = 0; i < 8; i++) {
+    twai_message_t efuse_msg = {}; 
+    efuse_msg.identifier = 0x710 + i;   
+    efuse_msg.extd = 0;             
+    efuse_msg.data_length_code = 8; 
+
+    // Mode 1 maps to eFuse 0 (0x710). Mode 8 maps to eFuse 7 (0x717).
+    if (mode == (i + 1)) {
+      // Simulate PMBus Status Word with FAULT_MASK active (0x703F)
+      efuse_msg.data[6] = 0x3F; // Low byte
+      efuse_msg.data[7] = 0x70; // High byte
+    } else {
+      // Clean status word
+      efuse_msg.data[6] = 0x00; 
+      efuse_msg.data[7] = 0x00; 
+    }
+
+    twai_transmit(&efuse_msg, pdMS_TO_TICKS(1));
   }
 }
 
@@ -143,25 +210,18 @@ void checkButtons() {
 
   bool downPressed = (digitalRead(BTN_DOWN_PIN) == HIGH);
   bool upPressed = (digitalRead(BTN_UP_PIN) == HIGH);
-  bool testPressed = (digitalRead(BTN_TEST_PIN) == HIGH); 
 
-  if ((downPressed || upPressed || testPressed) && (currentMillis - lastBtnPress > debounceDelay)) {
-    
+  if ((downPressed || upPressed) && (currentMillis - lastBtnPress > debounceDelay)) {
     if (upPressed) {
       activeScreen++;
       if (activeScreen > 4) activeScreen = 4; 
-      sendActiveScreenCANMessage(activeScreen);
     } 
     else if (downPressed) {
       activeScreen--;
       if (activeScreen < 1) activeScreen = 1; 
-      sendActiveScreenCANMessage(activeScreen);
     }
-    else if (testPressed) {
-      testErrorActive = !testErrorActive; 
-      sendPDUErrorTestCANMessage(testErrorActive);
-    }
-
+    
+    sendActiveScreenCANMessage(activeScreen);
     lastBtnPress = currentMillis;
   }
 }
