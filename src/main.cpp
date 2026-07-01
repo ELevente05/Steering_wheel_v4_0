@@ -5,12 +5,13 @@
 // --- PIN CONFIGURATION ---
 #define LED_PIN       4
 #define NUM_LEDS      9
-#define CAN_TX_PIN    39
-#define CAN_RX_PIN    38
+#define CAN_TX_PIN    1
+#define CAN_RX_PIN    2
 
 // --- BUTTON PINS ---
 #define BTN_DOWN_PIN  5 
-#define BTN_UP_PIN    6 
+#define BTN_UP_PIN    42
+#define BTN_TEST_PIN  7 // NEW: PDU Error Test Button
 
 // --- STATE VARIABLES ---
 int currentRpm = 0;
@@ -18,6 +19,9 @@ const int rpmStart = 3000;
 const int rpmMax = 9500;
 
 int activeScreen = 1; 
+
+// Toggle state for our simulated PDU error
+bool testErrorActive = false; 
 
 // Button Debounce Variables
 unsigned long lastBtnPress = 0;
@@ -31,6 +35,7 @@ void setupCAN();
 void checkCANMessages();
 void checkButtons();
 void sendActiveScreenCANMessage(uint8_t screenNum);
+void sendPDUErrorTestCANMessage(bool hasError); // NEW: Test message function
 void updateLEDs(int rpm);
 void playBootLedAnimation();
 
@@ -55,9 +60,10 @@ void setup() {
 
   playBootLedAnimation();
 
-  // 2. Initialize Buttons (INPUT_PULLUP handles the NC hardware)
+  // 2. Initialize Buttons (INPUT_PULLUP handles the NC/NO hardware)
   pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
   pinMode(BTN_UP_PIN, INPUT_PULLUP);
+  pinMode(BTN_TEST_PIN, INPUT_PULLUP); // NEW: Initialize test button
 
   // 3. Initialize CAN Bus
   setupCAN();
@@ -67,7 +73,7 @@ void loop() {
   // 1. Listen for incoming RPM data from the vehicle network
   checkCANMessages();
 
-  // 2. Scan buttons to change screens
+  // 2. Scan buttons to change screens and trigger test messages
   checkButtons();
 
   // 3. Update the LEDs to match the dashboard exactly
@@ -122,6 +128,25 @@ void sendActiveScreenCANMessage(uint8_t screenNum) {
   }
 }
 
+// NEW: Function to send the simulated PDU error
+void sendPDUErrorTestCANMessage(bool hasError) {
+  twai_message_t tx_msg;
+  tx_msg.identifier = 0x620;   // Matches the Dashboard's PDU ID
+  tx_msg.extd = 0;             
+  tx_msg.data_length_code = 1; 
+  
+  // If active, send 0x07 (binary 0000 0111) to trigger FET, Power, and Volt errors simultaneously.
+  // If inactive, send 0x00 to clear all warnings.
+  tx_msg.data[0] = hasError ? 0x07 : 0x00;  
+  
+  if (twai_transmit(&tx_msg, pdMS_TO_TICKS(10)) == ESP_OK) {
+    Serial.print("PDU Test Error sent! State: ");
+    Serial.println(hasError ? "ACTIVE" : "CLEARED");
+  } else {
+    Serial.println("Warning: Failed to send PDU test message on CAN bus.");
+  }
+}
+
 // ==========================================
 // BUTTON HANDLING
 // ==========================================
@@ -129,22 +154,32 @@ void sendActiveScreenCANMessage(uint8_t screenNum) {
 void checkButtons() {
   unsigned long currentMillis = millis();
 
-  // Reading HIGH because your buttons are Normally Closed (NC)
+  // Reading HIGH because your original buttons are Normally Closed (NC)
   bool downPressed = (digitalRead(BTN_DOWN_PIN) == HIGH);
   bool upPressed = (digitalRead(BTN_UP_PIN) == HIGH);
+  
+  // Assuming the test button is a standard Normally Open (NO) button connected to Ground.
+  // If it is ALSO Normally Closed (NC), change "LOW" to "HIGH" below!
+  bool testPressed = (digitalRead(BTN_TEST_PIN) == LOW); 
 
-  if ((downPressed || upPressed) && (currentMillis - lastBtnPress > debounceDelay)) {
+  if ((downPressed || upPressed || testPressed) && (currentMillis - lastBtnPress > debounceDelay)) {
     
     if (upPressed) {
       activeScreen++;
       if (activeScreen > 4) activeScreen = 4; // Dashboard max screen is 4
+      sendActiveScreenCANMessage(activeScreen);
     } 
     else if (downPressed) {
       activeScreen--;
       if (activeScreen < 1) activeScreen = 1; // Dashboard min screen is 1
+      sendActiveScreenCANMessage(activeScreen);
+    }
+    else if (testPressed) {
+      // Toggle the error state on/off
+      testErrorActive = !testErrorActive; 
+      sendPDUErrorTestCANMessage(testErrorActive);
     }
 
-    sendActiveScreenCANMessage(activeScreen);
     lastBtnPress = currentMillis;
   }
 }
