@@ -26,7 +26,7 @@
 #define DIP_PIN_8     8  // Binary weight: 8
 
 // --- STATE VARIABLES ---
-int currentRpm = 0;
+int currentRpm = 4000;
 const int rpmStart = 3000;
 const int rpmMax = 9500;
 
@@ -244,17 +244,22 @@ void updateLEDs(int rpm) {
   strip.clear(); 
 
   if (redline) {
-    if ((millis() / 50) % 2 == 0) {
+    // Flash blue at redline
+    if ((millis() / 100) % 2 == 0) {
       for(int i = 0; i < NUM_LEDS; i++) {
         strip.setPixelColor(i, strip.Color(0, 0, 255));
       }
     }
   } else {
     for (int i = 0; i < NUM_LEDS; i++) {
-      if (i >= NUM_LEDS - numLedsToLight) {
-        if (i >= 6) strip.setPixelColor(i, strip.Color(0, 255, 0));       
-        else if (i >= 3) strip.setPixelColor(i, strip.Color(255, 255, 0)); 
-        else strip.setPixelColor(i, strip.Color(255, 0, 0));               
+      if (i < numLedsToLight) {
+        if (i < 3) {
+          strip.setPixelColor(i, strip.Color(0, 255, 0));       // LEDs 0, 1, 2: Green
+        } else if (i < 6) {
+          strip.setPixelColor(i, strip.Color(255, 255, 0));     // LEDs 3, 4, 5: Yellow
+        } else {
+          strip.setPixelColor(i, strip.Color(255, 0, 0));       // LEDs 6, 7, 8: Red
+        }               
       }
     }
   }
