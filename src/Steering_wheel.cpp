@@ -9,17 +9,16 @@
 #define CAN_RX_PIN    2
 
 // --- BUTTON PINS ---
-#define BTN_DOWN_PIN  5
-#define BTN_2_PIN     6
-#define BTN_3_PIN     7
-#define BTN_BCK_1_PIN 39
-#define BTN_BCK_2_PIN 15
-#define BTN_4_PIN     40
-#define BTN_5_PIN     41
-#define BTN_UP_PIN    42
+// #define BTN_1_PIN  5 Dead
+#define BTN_2_PIN     6   // Screen down
+//#define BTN_3_PIN     7   
+#define BTN_BCK_1_PIN 39  // Shift up
+#define BTN_BCK_2_PIN 15  // Shift down
+//#define BTN_4_PIN     40
+#define BTN_5_PIN     41  // Screen up
+//#define BTN_6_PIN    42 Dead
 
 // --- ROTARY DIP SWITCH PINS ---
-// Assumes Common (C) is connected to Ground (Active LOW)
 #define DIP_PIN_1     16 // Binary weight: 1
 #define DIP_PIN_2     17 // Binary weight: 2
 #define DIP_PIN_4     18 // Binary weight: 4
@@ -46,7 +45,7 @@ void setupCAN();
 void checkCANMessages();
 void checkButtons();
 int readRotaryDIP();
-void broadcastMockErrors(int mode);
+//void broadcastMockErrors(int mode);
 void sendActiveScreenCANMessage(uint8_t screenNum);
 void updateLEDs(int rpm);
 void playBootLedAnimation();
@@ -60,8 +59,8 @@ inline int16_t parseLE(const uint8_t* data, int offset) {
 void setup() {
   delay(800); 
 
-  Serial.begin(115200);
-  Serial.println("Starting Steering Wheel CAN Controller...");
+  //Serial.begin(115200);
+  //Serial.println("Starting Steering Wheel CAN Controller...");
   
   // 1. Initialize LEDs
   strip.begin();
@@ -72,8 +71,10 @@ void setup() {
   playBootLedAnimation();
 
   // 2. Initialize Buttons
-  pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
-  pinMode(BTN_UP_PIN, INPUT_PULLUP);
+  //pinMode(BTN_1_PIN, INPUT_PULLUP); Dead
+  //pinMode(BTN_6_PIN, INPUT_PULLUP); Dead
+  pinMode(BTN_2_PIN, INPUT_PULLUP);
+  pinMode(BTN_5_PIN, INPUT_PULLUP);
 
   // 3. Initialize Rotary DIP Switch
   pinMode(DIP_PIN_1, INPUT_PULLUP);
@@ -92,18 +93,18 @@ void loop() {
   // 2. Scan screen change buttons
   checkButtons();
 
-  // 3. Check Rotary Switch and Broadcast Errors (every 100ms to compete with real PDU if connected)
+  /* 3. Check Rotary Switch and Broadcast Errors (every 100ms to compete with real PDU if connected)
   int currentDIP = readRotaryDIP();
   if (currentDIP != lastDIPValue || millis() - lastErrorBroadcast > 100) {
     if (currentDIP != lastDIPValue) {
-      Serial.print("Rotary Switch Changed! New Mode: ");
-      Serial.println(currentDIP);
+      //Serial.print("Rotary Switch Changed! New Mode: ");
+      //Serial.println(currentDIP);
       lastDIPValue = currentDIP;
     }
     
     broadcastMockErrors(currentDIP);
     lastErrorBroadcast = millis();
-  }
+  }*/
 
   // 4. Update the LEDs
   updateLEDs(currentRpm);
@@ -138,10 +139,10 @@ void setupCAN() {
   
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
     if (twai_start() == ESP_OK) {
-      Serial.println("CAN Bus initialized successfully.");
+      //Serial.println("CAN Bus initialized successfully.");
     }
   } else {
-    Serial.println("Failed to initialize CAN Bus.");
+    //Serial.println("Failed to initialize CAN Bus.");
   }
 }
 
@@ -164,7 +165,7 @@ void sendActiveScreenCANMessage(uint8_t screenNum) {
   twai_transmit(&tx_msg, pdMS_TO_TICKS(10));
 }
 
-// Simulate the complex telemetry of the PDU based on the rotary dial position
+/* //Simulate the errors of the PDU based on the rotary dial position
 void broadcastMockErrors(int mode) {
   // 1. Handle Global PDU Faults (ID 0x620)
   twai_message_t pdu_msg = {}; 
@@ -199,7 +200,7 @@ void broadcastMockErrors(int mode) {
 
     twai_transmit(&efuse_msg, pdMS_TO_TICKS(1));
   }
-}
+}*/
 
 // ==========================================
 // BUTTON HANDLING
@@ -208,8 +209,8 @@ void broadcastMockErrors(int mode) {
 void checkButtons() {
   unsigned long currentMillis = millis();
 
-  bool downPressed = (digitalRead(BTN_DOWN_PIN) == HIGH);
-  bool upPressed = (digitalRead(BTN_UP_PIN) == HIGH);
+  bool downPressed = (digitalRead(BTN_2_PIN) == HIGH);
+  bool upPressed = (digitalRead(BTN_5_PIN) == HIGH);
 
   if ((downPressed || upPressed) && (currentMillis - lastBtnPress > debounceDelay)) {
     if (upPressed) {
