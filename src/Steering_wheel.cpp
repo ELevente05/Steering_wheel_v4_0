@@ -215,7 +215,7 @@ void checkButtons() {
   if ((downPressed || upPressed) && (currentMillis - lastBtnPress > debounceDelay)) {
     if (upPressed) {
       activeScreen++;
-      if (activeScreen > 4) activeScreen = 4; 
+      if (activeScreen > 5) activeScreen = 5; 
     } 
     else if (downPressed) {
       activeScreen--;
